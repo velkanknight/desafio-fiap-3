@@ -13,16 +13,18 @@
 name: Analytics Service CI/CD
 
 on:
+  workflow_dispatch: {}
   push:
     branches: [main]
-    paths: ['analytics-service/**']
+    paths: ['analytics-service/**', '.github/workflows/analytics-service.yml']
   pull_request:
     branches: [main]
-    paths: ['analytics-service/**']
+    paths: ['analytics-service/**', '.github/workflows/analytics-service.yml']
 
 permissions:
   id-token: write
   contents: read
+  security-events: write
 
 env:
   SERVICE_NAME: analytics-service
@@ -190,8 +192,8 @@ jobs:
           # Clona o repo GitOps separado com um token com permissão
           # de push nele (Secret GH_PAT) — o GITHUB_TOKEN padrão só
           # vale para ESTE repositório.
-          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops
-          cd gitops
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops-repo
+          cd gitops-repo
 
           # Substitui a tag da imagem no manifesto deste serviço —
           # é a única mudança que essa pipeline faz no repo GitOps.
