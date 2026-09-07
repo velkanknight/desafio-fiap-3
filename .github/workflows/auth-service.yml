@@ -27,10 +27,10 @@ on:
   workflow_dispatch: {} # permite rodar manualmente pela aba Actions (sem precisar de commit)
   push:
     branches: [main] # só quando o push é na branch main
-    paths: ['auth-service/**'] # só quando o commit mexe em algo dentro de auth-service/ (evita rodar workflow de um serviço por mudança em outro)
+    paths: ['auth-service/**', '.github/workflows/auth-service.yml'] # só quando o commit mexe em algo dentro de auth-service/ (evita rodar workflow de um serviço por mudança em outro)
   pull_request:
     branches: [main] # PRs que MIRAM a main (não precisa a origem ser main)
-    paths: ['auth-service/**']
+    paths: ['auth-service/**', '.github/workflows/auth-service.yml']
 
 # "permissions" no nível do workflow controla o que o GITHUB_TOKEN
 # automático pode fazer nesta execução.
