@@ -89,9 +89,9 @@ jobs:
           go-version: '1.25'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6 # action pronta que já sabe instalar e rodar o golangci-lint
+        uses: golangci/golangci-lint-action@v7 # v7 = golangci-lint v2 (o v1 é compilado com go 1.23 e recusa módulos go 1.25)
         with:
-          version: v1.62.2 # pinado na última série v1 — o golangci-lint v2 mudou o formato de config e quebra sem migração
+          version: v2.1.6 # v2: roda com config default (o projeto não tem .golangci.yml)
           working-directory: ${{ env.SERVICE_NAME }} # roda só dentro da pasta do serviço
 
   # ─── 3. Security Scan (SAST + SCA) ────────────────────────────
