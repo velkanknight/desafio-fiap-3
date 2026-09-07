@@ -171,6 +171,7 @@ jobs:
           format: 'table'
           exit-code: '1'
           severity: 'CRITICAL'
+          ignore-unfixed: true  # so bloqueia CRITICAL COM correcao disponivel (nao trava em CVE de SO sem patch)
 
       # Atualiza o deployment.yaml do evaluation-service no repositório
       # GitOps separado — o ArgoCD, que fica de olho nesse repo, detecta
