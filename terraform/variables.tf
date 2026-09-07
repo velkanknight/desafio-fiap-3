@@ -25,7 +25,7 @@ variable "vpc_cidr" {
 variable "kubernetes_version" {
   description = "Versão do Kubernetes que o cluster EKS vai rodar"
   type        = string
-  default     = "1.30"
+  default     = "1.33"
 }
 
 variable "eks_node_instance_type" {

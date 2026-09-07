@@ -96,7 +96,6 @@ module "eks" {
   prefix          = local.prefix
   cluster_version = var.kubernetes_version    # versão do Kubernetes, ex: "1.30"
   aws_region      = var.aws_region
-  vpc_id          = module.vpc.vpc_id          # <- output do módulo vpc virando input aqui
   private_subnets = module.vpc.private_subnets # os nodes/pods rodam nas subnets PRIVADAS
   public_subnets  = module.vpc.public_subnets  # necessário pro control plane multi-AZ
   instance_type   = var.eks_node_instance_type # tipo de máquina EC2 dos nodes (ex: t3.medium)

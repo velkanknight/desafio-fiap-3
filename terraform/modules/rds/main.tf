@@ -48,7 +48,7 @@ resource "aws_db_subnet_group" "main" {
 resource "aws_db_instance" "main" {
   identifier     = var.prefix          # nome da instância na AWS (ex: "togglemaster-auth")
   engine         = "postgres"
-  engine_version = "15.4"
+  engine_version = "15" # major apenas: a AWS escolhe o minor suportado mais recente (15.4 foi descontinuado)
   instance_class = var.instance_class  # tamanho da máquina (ex: db.t3.micro)
   allocated_storage = 20               # espaço em disco, em GB
 

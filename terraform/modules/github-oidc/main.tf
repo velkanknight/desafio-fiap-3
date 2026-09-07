@@ -83,10 +83,14 @@ data "aws_iam_policy_document" "trust" {
     # qualquer (mesmo de outra conta) não passa por essa condição.
     # O "*" no final aceita qualquer branch/PR/tag desse repo; pra
     # restringir só à branch main, troque por "ref:refs/heads/main".
+    # O "*" logo após o org e o repo absorve os IDs numéricos imutáveis
+    # (repo:owner@123/repo@456:...) que o GitHub injeta no claim "sub"
+    # quando o repositório usa "immutable identifiers" no token OIDC —
+    # sem esses "*" a condição não bate e o Actions recebe AccessDenied.
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_org}/${var.github_repo}:*"]
+      values   = ["repo:${var.github_org}*/${var.github_repo}*:*"]
     }
   }
 }
