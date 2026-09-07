@@ -24,6 +24,7 @@ name: Auth Service CI/CD
 
 # "on" define QUANDO este workflow roda.
 on:
+  workflow_dispatch: {} # permite rodar manualmente pela aba Actions (sem precisar de commit)
   push:
     branches: [main] # só quando o push é na branch main
     paths: ['auth-service/**'] # só quando o commit mexe em algo dentro de auth-service/ (evita rodar workflow de um serviço por mudança em outro)
