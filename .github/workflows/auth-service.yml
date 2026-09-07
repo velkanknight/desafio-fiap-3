@@ -235,8 +235,11 @@ jobs:
           # Access Token (Secret GH_PAT) — precisa de um token à
           # parte porque o GITHUB_TOKEN automático só tem permissão
           # NESTE repositório, não no togglemaster-gitops.
-          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops
-          cd gitops
+          # clona em "gitops-repo" (não "gitops") porque este repo já
+          # tem uma pasta gitops/ na raiz — clonar em "gitops" daria
+          # "destination path already exists".
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops-repo
+          cd gitops-repo
 
           # Troca a linha "image: ..." dentro do deployment.yaml
           # deste serviço pela imagem que acabamos de publicar —
