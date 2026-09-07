@@ -14,16 +14,18 @@
 name: Evaluation Service CI/CD
 
 on:
+  workflow_dispatch: {}
   push:
     branches: [main]
-    paths: ['evaluation-service/**'] # só dispara em mudanças nesta pasta
+    paths: ['evaluation-service/**', '.github/workflows/evaluation-service.yml']
   pull_request:
     branches: [main]
-    paths: ['evaluation-service/**']
+    paths: ['evaluation-service/**', '.github/workflows/evaluation-service.yml']
 
 permissions:
-  id-token: write # necessário pro OIDC (job "docker" assume a Role via configure-aws-credentials)
+  id-token: write        # necessário pro OIDC (job "docker" assume a Role via configure-aws-credentials)
   contents: read
+  security-events: write # upload dos SARIF (Trivy/gosec) na aba Security
 
 env:
   SERVICE_NAME: evaluation-service
@@ -39,7 +41,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
       - name: Download deps
         run: |
           cd ${{ env.SERVICE_NAME }}
@@ -57,9 +59,9 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v7 # v7 = golangci-lint v2 (v1 recusa módulo go 1.25)
         with:
           version: latest
           working-directory: ${{ env.SERVICE_NAME }}
@@ -96,7 +98,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.25'
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -170,8 +172,8 @@ jobs:
       # o commit novo e aplica no cluster automaticamente.
       - name: Update GitOps repo
         run: |
-          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops
-          cd gitops
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops-repo
+          cd gitops-repo
           sed -i "s|image: .*|image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}|" ${{ env.SERVICE_NAME }}/deployment.yaml
           git config user.email "ci@github.com"
           git config user.name "GitHub Actions"

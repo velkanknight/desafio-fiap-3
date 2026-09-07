@@ -1,18 +1,17 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
 COPY go.mod go.sum ./
-COPY *.go ./
-
-RUN go mod tidy
 RUN go mod download
+
+COPY *.go ./
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /evaluation-service .
 
 # Runtime stage
-FROM alpine:3.19
+FROM alpine:3.21
 
 RUN apk --no-cache add ca-certificates
 
