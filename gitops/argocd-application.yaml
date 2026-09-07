@@ -26,7 +26,16 @@ spec:
     # conteúdo desta pasta gitops/ inteira, copiado pra lá.
     repoURL: https://github.com/SEU_USER/togglemaster-gitops.git
     targetRevision: main # branch observada
-    path: . # sincroniza TUDO na raiz do repositório GitOps (todos os yaml)
+    path: . # raiz do repositório GitOps
+
+    directory:
+      # Sem isto o ArgoCD NÃO entra nas subpastas (auth-service/,
+      # flag-service/, ...) — os Deployments/Services dos 5 serviços
+      # ficariam de fora do sync.
+      recurse: true
+      # O próprio manifesto da Application mora na raiz do repo GitOps;
+      # excluímos ele do sync pra o ArgoCD não tentar se gerenciar.
+      exclude: "argocd-application.yaml"
 
   destination:
     server: https://kubernetes.default.svc # "o cluster onde o próprio ArgoCD está rodando" (não é um cluster remoto)
