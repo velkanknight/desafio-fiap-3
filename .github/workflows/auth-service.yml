@@ -35,8 +35,9 @@ on:
 # "permissions" no nível do workflow controla o que o GITHUB_TOKEN
 # automático pode fazer nesta execução.
 permissions:
-  id-token: write # OBRIGATÓRIO para o step "Configure AWS credentials" conseguir pedir um token OIDC
-  contents: read  # só precisa ler o conteúdo do repo (checkout), não escrever nele
+  id-token: write        # OBRIGATÓRIO para o step "Configure AWS credentials" conseguir pedir um token OIDC
+  contents: read         # só precisa ler o conteúdo do repo (checkout), não escrever nele
+  security-events: write # necessário pro upload dos SARIF (Trivy/gosec) na aba Security do GitHub
 
 # "env" no nível do workflow: variáveis disponíveis em TODOS os jobs/steps abaixo.
 env:
