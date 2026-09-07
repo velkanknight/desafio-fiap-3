@@ -91,7 +91,7 @@ jobs:
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v7 # v7 = golangci-lint v2 (o v1 é compilado com go 1.23 e recusa módulos go 1.25)
         with:
-          version: v2.1.6 # v2: roda com config default (o projeto não tem .golangci.yml)
+          version: latest # precisa de um binário compilado com go >= 1.25; os pins antigos (v2.1.6 = go 1.24) recusam o módulo
           working-directory: ${{ env.SERVICE_NAME }} # roda só dentro da pasta do serviço
 
   # ─── 3. Security Scan (SAST + SCA) ────────────────────────────
