@@ -40,10 +40,25 @@ on:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
 
-  # Permite disparar manualmente pela aba "Actions" do GitHub (útil
-  # pra reaplicar sem precisar de um commit novo, ex: depois de mudar
-  # um valor só no terraform.tfvars.example como referência).
-  workflow_dispatch: {}
+  # Permite disparar manualmente pela aba "Actions" do GitHub. Serve
+  # pra dois casos:
+  #   - action = apply  -> reaplica a infra sem precisar de commit novo
+  #     (ex: depois de atualizar um Secret como o DB_PASSWORD).
+  #   - action = destroy -> roda "terraform plan -destroy" e, se aprovado,
+  #     "terraform destroy" — DERRUBA toda a infra criada por este state.
+  #     Antes de usar, apague os Load Balancers que o Kubernetes/ArgoCD
+  #     criou (kubectl delete svc ...), senão a VPC não deleta. O bucket
+  #     de state, o OIDC do GitHub e a role togglemaster-terraform-ci NÃO
+  #     são tocados (foram criados pelo bootstrap.sh, não pelo Terraform).
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "apply = cria/atualiza a infra | destroy = derruba tudo"
+        type: choice
+        options:
+          - apply
+          - destroy
+        default: apply
 
 # id-token: write -> obrigatório para o OIDC (a action
 # configure-aws-credentials pede um token de identidade ao GitHub e
@@ -103,11 +118,15 @@ jobs:
       # variável "db_password" (definida em variables.tf, sem
       # default) direto do ambiente, sem precisar de um arquivo
       # terraform.tfvars commitado (que exporia a senha no Git).
+      # PLAN_FLAGS ganha "-destroy" só quando o workflow foi disparado
+      # manualmente com action=destroy — aí o tfplan gerado é um plano
+      # de destruição, e o job "apply" abaixo aplica exatamente ele.
       - name: Terraform Plan
         id: plan
         env:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
-        run: terraform plan -no-color -input=false -out=tfplan
+          PLAN_FLAGS: ${{ (github.event_name == 'workflow_dispatch' && inputs.action == 'destroy') && '-destroy' || '' }}
+        run: terraform plan -no-color -input=false $PLAN_FLAGS -out=tfplan
         continue-on-error: true
 
       # Publica o resultado do plan como comentário no PR, pra quem
@@ -192,13 +211,18 @@ jobs:
 
       # Aplica o MESMO plano que foi revisado/aprovado acima, em vez
       # de recalcular um novo — evita "TOCTOU" (a infra real mudar
-      # entre o plan e o apply sem ninguém perceber).
+      # entre o plan e o apply sem ninguém perceber). Se o plano for
+      # de destroy (action=destroy no dispatch), é este mesmo comando
+      # que derruba a infra — `apply` de um plano `-destroy` destrói.
       - name: Terraform Apply
         env:
           TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
         run: terraform apply -input=false -auto-approve tfplan
 
+      # A partir daqui só faz sentido quando a infra existe — num
+      # destroy não há outputs pra ler nem pra escrever no GitOps.
       - name: Mostra os outputs
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.action == 'destroy') }}
         run: terraform output
 
       # ----------------------------------------------------------
@@ -218,6 +242,7 @@ jobs:
       # nunca pelo repositório GitOps.
       # ----------------------------------------------------------
       - name: Atualiza outputs no repositório GitOps
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.action == 'destroy') }}
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
           GITOPS_REPO: ${{ vars.GITOPS_REPO || 'togglemaster-gitops' }}

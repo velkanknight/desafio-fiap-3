@@ -1,0 +1,135 @@
+# ============================================================
+# PIPELINE: INSTALA O ARGOCD NO CLUSTER EKS
+#
+# Roda SÓ manualmente (workflow_dispatch), DEPOIS que a pipeline
+# terraform.yml já criou o cluster `togglemaster`. É o Passo 7 do
+# README automatizado: instala o ArgoCD, opcionalmente expõe a UI
+# via LoadBalancer e registra a Application que aponta pro repo
+# GitOps (togglemaster-gitops).
+#
+# AUTENTICAÇÃO: usa a MESMA role da pipeline de Terraform
+# (AWS_ROLE_ARN_TERRAFORM). Essa role foi quem criou o cluster, então
+# tem acesso admin implícito ao EKS (é o "cluster creator") — por isso
+# o kubectl funciona sem precisar mexer em aws-auth / access entries.
+#
+# PRÉ-REQUISITOS:
+#   - terraform.yml já concluído com sucesso (cluster no ar)
+#   - Secret AWS_ROLE_ARN_TERRAFORM configurado (mesmo do Passo 2)
+# ============================================================
+name: Instala ArgoCD
+
+on:
+  workflow_dispatch:
+    inputs:
+      expose_via_loadbalancer:
+        description: "Expor a UI do ArgoCD com um LoadBalancer AWS (custa ~US$18/mês; lembre de remover no destroy)"
+        type: boolean
+        default: true
+      registrar_application:
+        description: "Aplicar gitops/argocd-application.yaml (liga o ArgoCD ao repo togglemaster-gitops)"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write # OIDC pra assumir a role AWS
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: togglemaster
+  # Versão fixada do manifesto oficial do ArgoCD (em vez de "stable",
+  # que é um alias móvel) — deixa a instalação reproduzível.
+  ARGOCD_VERSION: v2.13.2
+
+jobs:
+  install:
+    name: Instala ArgoCD
+    runs-on: ubuntu-latest
+    # Mesmo gate de aprovação manual da pipeline de Terraform: cria
+    # recursos reais (e um LoadBalancer cobrado) no cluster.
+    environment: production
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_TERRAFORM }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configura o kubectl pro cluster EKS
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Confere acesso ao cluster
+        run: kubectl get nodes
+
+      # --------------------------------------------------------
+      # Instala o ArgoCD a partir do manifesto oficial do projeto.
+      # É idempotente: rodar de novo só aplica diffs (upgrade).
+      # --------------------------------------------------------
+      - name: Cria o namespace argocd
+        run: kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Instala/atualiza o ArgoCD
+        run: |
+          kubectl apply -n argocd -f \
+            "https://raw.githubusercontent.com/argoproj/argo-cd/${ARGOCD_VERSION}/manifests/install.yaml"
+
+      - name: Espera o ArgoCD subir
+        run: |
+          kubectl -n argocd rollout status deploy/argocd-server --timeout=300s
+          kubectl -n argocd rollout status deploy/argocd-repo-server --timeout=300s
+
+      # --------------------------------------------------------
+      # Opcional: expõe a UI. Sem isso, acesso só via
+      # `kubectl port-forward svc/argocd-server -n argocd 8080:443`.
+      # --------------------------------------------------------
+      - name: Expõe o argocd-server via LoadBalancer
+        if: ${{ inputs.expose_via_loadbalancer }}
+        run: |
+          kubectl -n argocd patch svc argocd-server \
+            -p '{"spec":{"type":"LoadBalancer"}}'
+          echo "Aguardando o LoadBalancer receber um endereço..."
+          for i in $(seq 1 30); do
+            host=$(kubectl -n argocd get svc argocd-server \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$host" ] && break
+            sleep 10
+          done
+          echo "ARGOCD_HOST=$host" >> "$GITHUB_ENV"
+
+      # --------------------------------------------------------
+      # Opcional: registra a Application. Troca o placeholder
+      # SEU_USER pelo dono real do repositório antes de aplicar.
+      # --------------------------------------------------------
+      - name: Registra a Application do ArgoCD
+        if: ${{ inputs.registrar_application }}
+        run: |
+          sed "s|SEU_USER|${{ github.repository_owner }}|g" \
+            gitops/argocd-application.yaml | kubectl apply -f -
+
+      # --------------------------------------------------------
+      # Resumo no Summary do run: URL da UI + senha inicial do admin.
+      # A senha é marcada como secret no log (::add-mask::) pra não
+      # vazar nos logs, mas aparece no Summary (que é privado do repo).
+      # --------------------------------------------------------
+      - name: Mostra como acessar
+        run: |
+          pass=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+            -o jsonpath='{.data.password}' | base64 -d)
+          echo "::add-mask::$pass"
+          {
+            echo "## ArgoCD instalado"
+            echo ""
+            if [ -n "${ARGOCD_HOST:-}" ]; then
+              echo "- **URL:** https://${ARGOCD_HOST}"
+            else
+              echo "- **URL:** \`kubectl port-forward svc/argocd-server -n argocd 8080:443\` -> https://localhost:8080"
+            fi
+            echo "- **Usuário:** admin"
+            echo "- **Senha inicial:** \`$pass\`"
+            echo ""
+            echo "Troque a senha no primeiro login. Para remover a senha inicial depois:"
+            echo "\`kubectl -n argocd delete secret argocd-initial-admin-secret\`"
+          } >> "$GITHUB_STEP_SUMMARY"

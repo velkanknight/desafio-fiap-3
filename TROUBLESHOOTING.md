@@ -120,6 +120,62 @@ que faltou (RDS, ElastiCache, e o que depender deles).
 
 ---
 
+## 6. RDS — `MasterUserPassword ... shorter than 8 characters`
+
+**Sintoma:** run `34162731165`, apply falha em 18s nos 3 RDS:
+`InvalidParameterValue: The parameter MasterUserPassword is not a valid
+password because it is shorter than 8 characters`.
+
+**Causa:** o secret `DB_PASSWORD` no GitHub tinha menos de 8 caracteres.
+Não é código — é valor de secret.
+
+**Correção:** secret `DB_PASSWORD` atualizado para 8+ caracteres.
+
+**Status:** ✅ resolvido — na run `34163759388` os 3 RDS subiram
+(`Apply complete! Resources: 3 added`).
+
+---
+
+## 6b. GitHub Actions bloqueado — email não verificado
+
+**Sintoma:** runs de `workflow_dispatch` terminavam em `startup_failure` em 1s.
+
+**Causa:** o email da conta GitHub estava sem verificar; o GitHub bloqueia
+Actions nesse caso. Adicionar o email de novo dava "email already in use"
+porque ele já estava na conta (só não verificado).
+
+**Correção:** Settings → Emails → **Resend verification email** → clicar no
+link recebido (não "Add email").
+
+**Status:** ✅ resolvido.
+
+---
+
+## 7. Job falha no passo "Atualiza outputs no repositório GitOps" — 403
+
+**Sintoma:** na run `34163759388`, `terraform apply` conclui com sucesso
+(infra criada), mas o último passo falha:
+
+```
+remote: Permission to velkanknight/togglemaster-gitops.git denied to velkanknight
+fatal: ... The requested URL returned error: 403
+```
+
+**Causa:** o secret `GH_PAT` não tem permissão de escrita no repositório
+`togglemaster-gitops`. O clone/commit funcionam, só o `git push` é negado.
+**Não afeta a infra** — ela já está criada e no state.
+
+**Correção:** gerar um PAT **classic** com escopo `repo` (ou fine-grained com
+*Contents: Read and write* em `togglemaster-gitops`) e atualizar o secret
+`GH_PAT`. As 5 pipelines de aplicação também dependem desse secret pra
+escrever a tag da imagem no repo GitOps, então precisa funcionar de qualquer
+forma. Depois, re-rodar a pipeline (o apply fica no-op, só o passo do GitOps
+roda de novo).
+
+**Status:** ⏳ aguardando novo `GH_PAT`.
+
+---
+
 ## Pendências / pontos de atenção ainda não atingidos
 
 Não bloqueiam a pipeline de Terraform, mas provavelmente aparecem nos passos
