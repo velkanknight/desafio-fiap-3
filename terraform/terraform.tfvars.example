@@ -7,7 +7,7 @@
 # ============================================================
 
 aws_region             = "us-east-1"
-db_username            = "admin"
+db_username            = "toggleadmin" # 'admin' é palavra reservada do PostgreSQL, o RDS recusa
 db_password            = "DEFINA-UMA-SENHA-FORTE-AQUI" # nunca deixe esse valor de exemplo!
 eks_node_instance_type = "t3.medium"
 eks_desired_size       = 2

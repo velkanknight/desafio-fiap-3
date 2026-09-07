@@ -92,6 +92,34 @@ o `15.4` (menor disponível hoje: `15.7`). Criar instância nova com `15.4` reto
 
 ---
 
+## 5. RDS — `MasterUsername admin ... is a reserved word used by the engine`
+
+**Sintoma:** no `apply` (run `34160340362`), depois de criar VPC + EKS 1.33 +
+node group + OIDC + IRSA com sucesso, as 3 instâncias RDS falharam:
+
+```
+InvalidParameterValue: MasterUsername *** cannot be used as it is a reserved
+word used by the engine
+  with module.rds_auth.aws_db_instance.main (idem flag e targeting)
+```
+
+**Causa:** `var.db_username` era `"admin"`. O PostgreSQL (15+) trata `admin`
+como palavra reservada e o RDS recusa usá-la como master username.
+
+**Correção aplicada:**
+- `terraform/variables.tf` — default de `db_username` `"admin"` → `"toggleadmin"`.
+- `terraform/terraform.tfvars.example` e `secrets.example.yaml` (3 DATABASE_URL)
+  atualizados para `toggleadmin`.
+
+**O que já existe na AWS depois dessa run:** VPC, EKS `togglemaster` (1.33),
+node group, OIDC provider do cluster, roles `togglemaster-evaluation-role` /
+`togglemaster-analytics-role` — o state foi salvo, o próximo `apply` só cria o
+que faltou (RDS, ElastiCache, e o que depender deles).
+
+**Status:** ✅ corrigido no código (aguardando novo `apply`).
+
+---
+
 ## Pendências / pontos de atenção ainda não atingidos
 
 Não bloqueiam a pipeline de Terraform, mas provavelmente aparecem nos passos

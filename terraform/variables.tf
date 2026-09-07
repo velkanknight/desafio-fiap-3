@@ -67,10 +67,10 @@ variable "use_academy_lab_role" {
 }
 
 variable "db_username" {
-  description = "Usuário administrador usado nos 3 bancos RDS (auth_db, flag_db, targeting_db)"
+  description = "Usuário administrador usado nos 3 bancos RDS (auth_db, flag_db, targeting_db). NÃO pode ser 'admin'/'rdsadmin' etc. — são palavras reservadas do PostgreSQL e o RDS recusa."
   type        = string
   sensitive   = true # o Terraform esconde esse valor nos logs/outputs de `plan`/`apply`
-  default     = "admin"
+  default     = "toggleadmin"
 }
 
 variable "db_password" {
