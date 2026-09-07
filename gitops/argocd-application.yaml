@@ -1,0 +1,40 @@
+# ============================================================
+# ARGOCD APPLICATION — é a "receita" que diz ao ArgoCD O QUE
+# sincronizar e DE ONDE. Diferente dos outros arquivos deste
+# diretório (que descrevem OS MICROSSERVIÇOS), este descreve o
+# PRÓPRIO ArgoCD: "fique de olho neste repositório Git, e aplique
+# tudo que tiver dentro dele no namespace togglemaster".
+#
+# Este manifesto é aplicado UMA VEZ, manualmente, DEPOIS de instalar
+# o ArgoCD no cluster (kubectl apply -f gitops/argocd-application.yaml
+# -n argocd) — ele não fica sendo gerenciado pelo próprio ArgoCD
+# (seria um pouco estranho o ArgoCD gerenciar a definição de si mesmo).
+#
+# AÇÃO MANUAL NECESSÁRIA: troque "SEU_USER" pelo seu usuário do
+# GitHub antes de aplicar.
+# ============================================================
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: togglemaster
+  namespace: argocd # a Application em si vive no namespace do ArgoCD, não no togglemaster
+spec:
+  project: default # projeto "padrão" do ArgoCD (suficiente pra este cenário, sem multi-tenant)
+
+  source:
+    # Repositório GitOps (separado do repositório de código) — é o
+    # conteúdo desta pasta gitops/ inteira, copiado pra lá.
+    repoURL: https://github.com/SEU_USER/togglemaster-gitops.git
+    targetRevision: main # branch observada
+    path: . # sincroniza TUDO na raiz do repositório GitOps (todos os yaml)
+
+  destination:
+    server: https://kubernetes.default.svc # "o cluster onde o próprio ArgoCD está rodando" (não é um cluster remoto)
+    namespace: togglemaster # onde os recursos (Deployments, Services, etc.) são aplicados
+
+  syncPolicy:
+    automated:
+      prune: true    # se um arquivo for REMOVIDO do repo GitOps, o ArgoCD apaga o recurso correspondente do cluster também
+      selfHeal: true # se ALGUÉM mudar algo manualmente no cluster (kubectl edit), o ArgoCD desfaz e volta pro que está no Git
+    syncOptions:
+      - CreateNamespace=true # cria o namespace "togglemaster" sozinho, se ainda não existir

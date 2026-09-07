@@ -1,0 +1,15 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars
+terraform/*.tfplan
+
+# Segredos - nunca commitar com valores reais
+secrets-reais.yaml
+*.env
+.env
+
+# SO / editor
+.DS_Store

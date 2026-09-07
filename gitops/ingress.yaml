@@ -1,0 +1,79 @@
+# ============================================================
+# INGRESS — a "porta de entrada" externa do cluster. Sem Ingress,
+# os Services (ClusterIP) só são alcançáveis DE DENTRO do cluster;
+# o Ingress + o Nginx Ingress Controller (instalado à parte, via
+# Helm) criam um Load Balancer público que roteia cada caminho
+# (path) pra um Service diferente.
+#
+# Roteamento configurado aqui:
+#   /auth/...      -> auth-service
+#   /flags/...     -> flag-service
+#   /rules/...     -> targeting-service
+#   /evaluate/...  -> evaluation-service
+#   /analytics/... -> analytics-service (só tem /health; não tem API pública de verdade)
+#
+# IMPORTANTE sobre o rewrite: cada microsserviço espera receber a
+# requisição SEM o prefixo (ex: o flag-service só entende "/flags",
+# não "/flags/flags"). Por isso usamos capture groups + rewrite-target
+# — ver comentários abaixo.
+# ============================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: togglemaster-ingress
+  namespace: togglemaster
+  annotations:
+    # Habilita usar expressão regular (regex) no campo "path" abaixo
+    # — sem isso, o Nginx Ingress trataria o path como texto literal.
+    nginx.ingress.kubernetes.io/use-regex: "true"
+
+    # "/$2" refere-se ao SEGUNDO grupo de captura de cada path (o
+    # "(.*)" no final de cada regra abaixo) — ou seja, tudo depois
+    # do prefixo é reescrito removendo o prefixo. Ex: uma requisição
+    # em "/flags/health" chega no flag-service como apenas "/health".
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+spec:
+  ingressClassName: nginx # diz qual Ingress Controller deve atender essas regras (o Nginx, instalado via Helm)
+  rules:
+    - http:
+        paths:
+          # "(/|$)(.*)" = dois grupos de captura: o primeiro casa
+          # com "/" (se tiver algo depois) ou fim de string (path
+          # exato); o segundo captura o restante do caminho — é o
+          # padrão clássico do Nginx Ingress pra permitir tanto
+          # "/auth" quanto "/auth/qualquer-coisa".
+          - path: /auth(/|$)(.*)
+            pathType: ImplementationSpecific # obrigatório quando o path usa regex (não é um "Prefix" simples)
+            backend:
+              service:
+                name: auth-service # tem que bater com o metadata.name do Service em gitops/auth-service/service.yaml
+                port:
+                  number: 80 # porta que o SERVICE expõe (não a porta do container)
+          - path: /flags(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: flag-service
+                port:
+                  number: 80
+          - path: /rules(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: targeting-service
+                port:
+                  number: 80
+          - path: /evaluate(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: evaluation-service
+                port:
+                  number: 80
+          - path: /analytics(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: analytics-service
+                port:
+                  number: 80

@@ -1,0 +1,18 @@
+# ============================================================
+# SERVICE — dá um "endereço estável" pros Pods do auth-service
+# (que sobem/descem/reiniciam e mudam de IP o tempo todo). Outros
+# Pods do cluster (e o Ingress) falam com "auth-service" (o nome
+# deste Service, via DNS interno do Kubernetes) em vez de IP.
+# ============================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-service # este nome vira um endereço DNS interno: http://auth-service
+  namespace: togglemaster
+spec:
+  type: ClusterIP # só acessível DE DENTRO do cluster (não expõe IP público sozinho — quem faz isso é o Ingress)
+  selector:
+    app: auth-service # manda tráfego pra QUALQUER Pod com este label (os 2 Pods do Deployment)
+  ports:
+    - port: 80         # porta que o Service expõe (usada pelos outros serviços e pelo Ingress)
+      targetPort: 8001  # porta real onde o container escuta (repassa port 80 -> 8001 internamente)

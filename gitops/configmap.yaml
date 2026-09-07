@@ -1,0 +1,39 @@
+# ============================================================
+# CONFIGMAP — guarda configuração NÃO SENSÍVEL, compartilhada entre
+# os 5 microsserviços (URLs internas, região da AWS, nome de
+# recursos). Diferente de um Secret, o conteúdo de um ConfigMap fica
+# em texto plano — por isso NUNCA deve ter senha/token aqui (esses
+# vão em Secret, ver secrets.example.yaml na raiz do projeto).
+#
+# Cada Deployment (gitops/<serviço>/deployment.yaml) referencia uma
+# ou mais chaves deste ConfigMap via "configMapKeyRef", injetando o
+# valor como variável de ambiente dentro do container.
+#
+# AÇÃO MANUAL NECESSÁRIA: depois do `terraform apply`, troque o
+# valor de AWS_SQS_URL abaixo pelo output "sqs_queue_url" (os outros
+# dois valores já são fixos e não precisam mudar).
+# ============================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: services-config     # nome usado nos "configMapKeyRef" dos Deployments
+  namespace: togglemaster   # só pods DESTE namespace conseguem referenciar este ConfigMap
+data:
+  # URLs internas — usam o nome do Service do Kubernetes como "host"
+  # (o Kubernetes tem um DNS interno que resolve "auth-service" pro
+  # IP do Service correspondente, dentro do mesmo namespace). Porta
+  # 80 porque é a porta que o Service expõe (ver gitops/*/service.yaml),
+  # mesmo que o container escute em outra porta por dentro (targetPort).
+  AUTH_SERVICE_URL: "http://auth-service"
+  FLAG_SERVICE_URL: "http://flag-service"
+  TARGETING_SERVICE_URL: "http://targeting-service"
+
+  AWS_REGION: "us-east-1"
+
+  # PLACEHOLDER — troque pelo output "sqs_queue_url" do Terraform
+  # depois do `terraform apply` (Passo 3 do README.md).
+  AWS_SQS_URL: "REPLACE_WITH_TERRAFORM_OUTPUT_sqs_queue_url"
+
+  # Nome da tabela é FIXO (definido assim no módulo terraform/modules/dynamodb),
+  # por isso já vem certo, sem precisar trocar.
+  AWS_DYNAMODB_TABLE: "ToggleMasterAnalytics"

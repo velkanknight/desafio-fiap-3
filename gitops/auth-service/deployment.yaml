@@ -1,0 +1,96 @@
+# ============================================================
+# DEPLOYMENT do auth-service — descreve COMO rodar os Pods deste
+# serviço: qual imagem, quantas réplicas, quais variáveis de
+# ambiente, e como o Kubernetes sabe se o Pod está saudável.
+#
+# Este é o arquivo que a pipeline de CI (.github/workflows/auth-service.yml)
+# edita automaticamente (troca a linha "image:") a cada push na main
+# — é assim que o código novo chega até aqui rodando no cluster.
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: auth-service
+  namespace: togglemaster
+spec:
+  replicas: 2 # 2 Pods idênticos rodando ao mesmo tempo — se um cair, o outro continua atendendo (alta disponibilidade)
+
+  # "selector" diz ao Deployment QUAIS Pods ele gerencia — tem que
+  # bater exatamente com os "labels" definidos no template abaixo.
+  selector:
+    matchLabels:
+      app: auth-service
+
+  template: # "carimbo" usado pra criar cada um dos 2 Pods
+    metadata:
+      labels:
+        app: auth-service # label usada pelo selector acima E pelo Service (auth-service/service.yaml) pra achar estes Pods
+    spec:
+      containers:
+        - name: auth-service
+
+          # PLACEHOLDER — a pipeline de CI substitui esta linha
+          # inteira automaticamente (via `sed`) toda vez que builda
+          # uma imagem nova; SEU_ACCOUNT_ID é só o valor inicial
+          # antes do primeiro push.
+          image: SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/togglemaster/auth-service:latest
+
+          ports:
+            - containerPort: 8001 # porta que o processo Go escuta DENTRO do container (definida no main.go do serviço)
+
+          # Variáveis de ambiente do container — cada uma vira
+          # exatamente o que o código em auth-service/main.go lê via
+          # os.Getenv("...").
+          env:
+            - name: PORT
+              value: "8001" # valor fixo, direto no manifesto (não é segredo nem varia por ambiente)
+
+            - name: DATABASE_URL
+              valueFrom:
+                # "secretKeyRef" busca o valor de dentro de um Secret
+                # do Kubernetes (nunca fica em texto plano aqui) —
+                # este Secret é criado manualmente, fora do Git (veja
+                # secrets.example.yaml e o Passo 5 do README.md).
+                secretKeyRef:
+                  name: auth-service-secrets
+                  key: DATABASE_URL
+
+            - name: MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: auth-service-secrets
+                  key: MASTER_KEY
+
+          # Kubernetes bate nesta rota periodicamente PRA SABER SE
+          # PODE MANDAR TRÁFEGO pro Pod. Se falhar, o Pod sai
+          # temporariamente da lista de destinos do Service (mas não é reiniciado).
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 5  # espera 5s depois do Pod subir antes da 1ª checagem
+            periodSeconds: 10       # checa a cada 10s
+
+          # Igual à readinessProbe, mas se falhar REPETIDAMENTE, o
+          # Kubernetes MATA e reinicia o container (é o "se travou,
+          # reinicia sozinho").
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 30
+
+          # "Requests" = o que o Pod GARANTIDAMENTE reserva no node
+          # (o Kubernetes só agenda o Pod num node que tenha essa
+          # sobra). "Limits" = o TETO que o Pod pode consumir antes
+          # de ser limitado (CPU) ou morto (memória, com OOMKilled).
+          # Sem isso, um Pod com bug (loop infinito, memory leak)
+          # poderia consumir o node inteiro e derrubar os outros Pods.
+          resources:
+            requests:
+              cpu: 100m     # 100m = 0.1 vCPU
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

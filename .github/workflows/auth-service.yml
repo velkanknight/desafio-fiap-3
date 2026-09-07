@@ -1,0 +1,259 @@
+# ============================================================
+# PIPELINE DE CI/CD DO auth-service (Go)
+#
+# COMO ESSE ARQUIVO SE ENCAIXA NO RESTO DO PROJETO:
+#
+#   1. Alguém dá push/PR mexendo em auth-service/**
+#   2. build -> lint -> security rodam em PARALELO (nenhum depende
+#      do outro), cada um validando uma coisa diferente do código
+#   3. Só se os 3 passarem (e só em push na main, não em PR), o job
+#      "docker" builda a imagem, publica no ECR (criado pelo
+#      Terraform, módulo ecr/) autenticando via OIDC (módulo
+#      github-oidc/) e escaneia a imagem publicada
+#   4. No final, o job "docker" edita o arquivo
+#      auth-service/deployment.yaml DENTRO DO REPOSITÓRIO GITOPS
+#      (togglemaster-gitops) trocando a tag da imagem — é esse commit
+#      que o ArgoCD detecta e usa pra atualizar o Pod rodando no
+#      cluster (o "D" de CD desse projeto é o ArgoCD, não este
+#      workflow — o workflow só ATUALIZA O GIT, quem aplica no
+#      cluster de fato é o ArgoCD, rodando dentro do EKS)
+# ============================================================
+
+# Nome mostrado na aba "Actions" do GitHub.
+name: Auth Service CI/CD
+
+# "on" define QUANDO este workflow roda.
+on:
+  push:
+    branches: [main] # só quando o push é na branch main
+    paths: ['auth-service/**'] # só quando o commit mexe em algo dentro de auth-service/ (evita rodar workflow de um serviço por mudança em outro)
+  pull_request:
+    branches: [main] # PRs que MIRAM a main (não precisa a origem ser main)
+    paths: ['auth-service/**']
+
+# "permissions" no nível do workflow controla o que o GITHUB_TOKEN
+# automático pode fazer nesta execução.
+permissions:
+  id-token: write # OBRIGATÓRIO para o step "Configure AWS credentials" conseguir pedir um token OIDC
+  contents: read  # só precisa ler o conteúdo do repo (checkout), não escrever nele
+
+# "env" no nível do workflow: variáveis disponíveis em TODOS os jobs/steps abaixo.
+env:
+  SERVICE_NAME: auth-service                    # nome da pasta do serviço (bate com o path do trigger acima)
+  ECR_REPOSITORY: togglemaster/auth-service      # nome do repositório ECR (criado pelo Terraform, modules/ecr)
+  AWS_REGION: us-east-1
+
+# "jobs" = as etapas independentes do pipeline. Por padrão, jobs
+# diferentes rodam em PARALELO, cada um numa máquina virtual "limpa".
+jobs:
+  # ─── 1. Build & Unit Test ───────────────────────────────────
+  # Garante que o código COMPILA e que os testes unitários passam
+  # (ex: auth-service/key_test.go, que testa hashAPIKey/generateAPIKey).
+  build:
+    runs-on: ubuntu-latest # máquina virtual do GitHub que executa este job
+    steps:
+      - uses: actions/checkout@v4 # baixa o código do repositório pra dentro da máquina virtual
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # instala o Go 1.22 na máquina virtual (o go.mod pede 1.21+)
+
+      - name: Download deps
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          go mod download # baixa as dependências listadas no go.mod/go.sum
+
+      - name: Run unit tests
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          # "-v" mostra cada teste rodando; "-race" ativa o detector de
+          # data races (condições de corrida entre goroutines) — pega
+          # bugs de concorrência que só apareceriam em produção sob carga.
+          go test ./... -v -race
+
+  # ─── 2. Linter (golangci-lint) ────────────────────────────────
+  # Analisa o código-fonte procurando problemas de ESTILO e padrões
+  # arriscados (ex: erro ignorado, variável não usada) SEM executar
+  # o código — é uma camada de qualidade, diferente dos testes.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v4 # action pronta que já sabe instalar e rodar o golangci-lint
+        with:
+          version: latest
+          working-directory: ${{ env.SERVICE_NAME }} # roda só dentro da pasta do serviço
+
+  # ─── 3. Security Scan (SAST + SCA) ────────────────────────────
+  # Esta é a etapa "DevSecOps" propriamente dita. Rodamos DUAS
+  # camadas de cada ferramenta:
+  #   (a) um relatório COMPLETO (todas as severidades), que só
+  #       ALIMENTA a aba "Security" do GitHub (nunca falha o job) —
+  #       serve pra visibilidade, não pra bloqueio.
+  #   (b) um "gate" (portão) que FALHA o job se achar algo grave —
+  #       é a "Regra de Bloqueio" da Fase 3 na prática.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- SCA (Software Composition Analysis): vulnerabilidades
+      #     em DEPENDÊNCIAS de terceiros (não no código que você
+      #     escreveu) ---
+      - name: 'Trivy (SCA) - relatório completo'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'                     # "fs" = escaneia os arquivos do projeto (não uma imagem Docker ainda)
+          scan-ref: '${{ env.SERVICE_NAME }}'  # só a pasta deste serviço
+          format: 'sarif'                     # formato de saída que o GitHub Security entende
+          output: 'trivy-fs.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'     # reporta as 3 severidades (mas ainda não FALHA por causa delas)
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3 # manda o relatório pra aba Security > Code scanning do GitHub
+        with:
+          sarif_file: 'trivy-fs.sarif'
+
+      - name: 'Trivy (SCA) - bloqueio em CRITICAL'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '${{ env.SERVICE_NAME }}'
+          format: 'table'      # aqui só queremos o log, não SARIF (não vamos fazer upload deste)
+          exit-code: '1'       # <- ISSO faz o step (e o job) FALHAR se achar algo
+          severity: 'CRITICAL' # só bloqueia em severidade CRÍTICA — HIGH/MEDIUM só ficam no relatório acima
+
+      # --- SAST (Static Application Security Testing): analisa O
+      #     SEU código-fonte, procurando padrões perigosos (ex: uso
+      #     de crypto fraca, SQL injection, etc.) ---
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest # instala a ferramenta de SAST pra Go
+
+      - name: 'gosec (SAST) - relatório completo'
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          # "|| true" faz esse step NUNCA falhar sozinho — ele só
+          # gera o relatório completo pra subir na aba Security.
+          gosec -fmt sarif -out ../gosec-results.sarif ./... || true
+
+      - name: Upload gosec SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'gosec-results.sarif'
+
+      - name: 'gosec (SAST) - bloqueio em severidade HIGH'
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          # SEM "|| true" aqui: se o gosec achar algo de severidade
+          # HIGH, ele sai com código de erro e o step falha de
+          # verdade. gosec não tem o conceito de "CRITICAL" (só
+          # LOW/MEDIUM/HIGH), então usamos HIGH como equivalente.
+          gosec -severity high ./...
+
+  # ─── 4. Docker Build & Push (só roda em push na main, e só se os 3 jobs acima passarem) ──
+  docker:
+    needs: [build, lint, security] # espera os 3 jobs acima terminarem com sucesso
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' # em Pull Request, PÁRA por aqui (não builda/publica imagem de PR)
+    steps:
+      - uses: actions/checkout@v4
+
+      # Troca o token OIDC deste workflow por credenciais AWS
+      # temporárias, assumindo a Role criada pelo Terraform (módulo
+      # github-oidc/). "role-to-assume" vem do Secret AWS_ROLE_ARN
+      # (Settings > Secrets and variables > Actions do repositório).
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Faz "docker login" no ECR usando as credenciais temporárias
+      # acima. "id: login-ecr" permite ler o output desta action nos
+      # steps seguintes (ex: steps.login-ecr.outputs.registry).
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push
+        env:
+          # "registry" é o endereço completo do ECR da sua conta,
+          # algo como "123456789012.dkr.ecr.us-east-1.amazonaws.com"
+          # — SEM esse prefixo, o "docker push" iria pro Docker Hub
+          # por engano, não pro ECR.
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }} # usa o hash do commit como tag — cada build gera uma tag única e rastreável
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ${{ env.SERVICE_NAME }}/
+          docker tag $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $REGISTRY/$ECR_REPOSITORY:latest
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+      # Mesmo padrão do job "security": relatório completo (não
+      # bloqueia) + gate (bloqueia em CRITICAL) — só que agora
+      # escaneando a IMAGEM DOCKER já publicada, não o código-fonte.
+      - name: 'Scan da imagem - relatório completo'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload container scan SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-image.sarif'
+
+      - name: 'Scan da imagem - bloqueio em CRITICAL'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+
+      # ─── 5. Atualiza o repositório GitOps (é isso que "avisa" o ArgoCD) ──────
+      - name: Update GitOps repo
+        run: |
+          # Clona o repositório GitOps separado usando um Personal
+          # Access Token (Secret GH_PAT) — precisa de um token à
+          # parte porque o GITHUB_TOKEN automático só tem permissão
+          # NESTE repositório, não no togglemaster-gitops.
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops
+          cd gitops
+
+          # Troca a linha "image: ..." dentro do deployment.yaml
+          # deste serviço pela imagem que acabamos de publicar —
+          # é a "ponte" entre CI (este arquivo) e CD (ArgoCD).
+          sed -i "s|image: .*|image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}|" ${{ env.SERVICE_NAME }}/deployment.yaml
+
+          git config user.email "ci@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+
+          # "git diff --staged --quiet" não imprime nada, só retorna
+          # código de saída: 0 = sem diferenças, 1 = tem diferença.
+          # Com "||", só faz o commit/push SE realmente mudou algo
+          # (evita erro de "nothing to commit" quando por acaso a tag
+          # já era a mesma).
+          git diff --staged --quiet || (git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}" && git push origin main)
+
+          # A PARTIR DAQUI, quem assume é o ArgoCD: ele fica
+          # observando este repositório GitOps e, ao detectar este
+          # commit novo, aplica o deployment.yaml atualizado no
+          # cluster EKS automaticamente (Application configurada em
+          # gitops/argocd-application.yaml, com syncPolicy.automated).

@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: evaluation-service
+  namespace: togglemaster
+data:
+  DATABASE_HOST: "TOGGLEMASTER_EVALUATION_SERVICE_ENDPOINT"
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: "authdb"
+  DATABASE_USER: "TOGGLEMASTER_DB_USERNAME"
+  MASTER_KEY: "TOGGLEMASTER_MASTER_KEY"
+

@@ -1,0 +1,13 @@
+# Endereço estável do flag-service dentro do cluster: http://flag-service
+apiVersion: v1
+kind: Service
+metadata:
+  name: flag-service
+  namespace: togglemaster
+spec:
+  type: ClusterIP
+  selector:
+    app: flag-service
+  ports:
+    - port: 80        # porta exposta pro resto do cluster / Ingress
+      targetPort: 8002 # porta real do container (gunicorn)

@@ -1,0 +1,209 @@
+# ============================================================
+# PIPELINE DE CI/CD DO targeting-service (Python/Flask)
+#
+# Mesma estrutura geral dos workflows em Go (veja auth-service.yml
+# para a explicação completa de OIDC/ECR/GitOps) — o que muda aqui
+# são as FERRAMENTAS, porque é um projeto Python:
+#   - lint:      flake8 (equivalente Python do golangci-lint)
+#   - SAST:      Bandit (equivalente Python do gosec)
+#   - unit test: pytest, mas SÓ SE existir algum arquivo de teste
+#                (este serviço ainda não tem — ver o step abaixo)
+# ============================================================
+
+name: Targeting Service CI/CD
+
+on:
+  push:
+    branches: [main]
+    paths: ['targeting-service/**']
+  pull_request:
+    branches: [main]
+    paths: ['targeting-service/**']
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  SERVICE_NAME: targeting-service
+  ECR_REPOSITORY: togglemaster/targeting-service
+  AWS_REGION: us-east-1
+
+jobs:
+  # ─── 1. Build & Unit Test ───────────────────────────────────
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          pip install -r requirements.txt
+
+      - name: Run unit tests (se houver)
+        run: |
+          cd ${{ env.SERVICE_NAME }}
+          # O código deste serviço conecta direto no PostgreSQL já na
+          # IMPORTAÇÃO do módulo (app.py cria o pool de conexões no
+          # nível do arquivo) — ou seja, um teste automatizado de
+          # verdade precisaria de um Postgres real disponível no job.
+          # Como ainda não existe nenhum teste aqui, este step SÓ
+          # procura por arquivos de teste e roda o pytest se achar
+          # algum; do contrário, avisa e segue (não falha à toa).
+          # Isso também evita o problema clássico de "pytest sem
+          # nenhum teste" retornar código de erro e quebrar o pipeline.
+          if find . -name "test_*.py" -o -name "*_test.py" | grep -q .; then
+            pip install pytest
+            pytest -v
+          else
+            echo "Nenhum teste encontrado neste serviço — pulando (requisito é 'testes unitários, se houver')."
+          fi
+
+  # ─── 2. Linter (flake8) ────────────────────────────────
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install linters
+        run: pip install flake8
+      - name: Run flake8
+        run: flake8 ${{ env.SERVICE_NAME }} --max-line-length=120 # verifica estilo/erros óbvios de sintaxe, sem executar o código
+
+  # ─── 3. Security Scan (SAST + SCA) ────────────────────────────
+  # Mesma filosofia dos workflows em Go: relatório completo (não
+  # bloqueia, só alimenta a aba Security) + gate que bloqueia em
+  # achado grave — a "Regra de Bloqueio" da Fase 3.
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- SCA: Trivy olhando o requirements.txt em busca de
+      #     dependências com vulnerabilidades conhecidas ---
+      - name: 'Trivy (SCA) - relatório completo'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '${{ env.SERVICE_NAME }}'
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-fs.sarif'
+
+      - name: 'Trivy (SCA) - bloqueio em CRITICAL'
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '${{ env.SERVICE_NAME }}'
+          format: 'table'
+          exit-code: '1' # falha o job se achar dependência CRÍTICA
+          severity: 'CRITICAL'
+
+      # --- SAST: Bandit analisa o CÓDIGO Python em busca de padrões
+      #     perigosos (ex: uso de eval(), senha hardcoded, SQL
+      #     montado por concatenação de string, etc.) ---
+      - name: 'Bandit (SAST) - relatório completo'
+        run: |
+          pip install bandit[sarif] # "[sarif]" instala o suporte a exportar nesse formato
+          bandit -r ${{ env.SERVICE_NAME }} -f sarif -o bandit-results.sarif || true # "-r" = recursivo; "|| true" não bloqueia aqui
+
+      - name: Upload Bandit SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'bandit-results.sarif'
+
+      - name: 'Bandit (SAST) - bloqueio em severidade HIGH'
+        run: |
+          pip install bandit
+          # "-lll" = só reporta achados de severidade ALTA (Bandit
+          # não tem "CRITICAL", então HIGH é o equivalente mais
+          # próximo). SEM "|| true": se achar algo, o step falha de
+          # propósito, travando o job "security" e por consequência
+          # o job "docker" (que depende dele).
+          bandit -r ${{ env.SERVICE_NAME }} -lll
+
+  # ─── 4. Docker Build & Push ─────────────────────────────────
+  docker:
+    needs: [build, lint, security]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' # só builda/publica imagem em push na main, nunca em PR
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }} # Role do Terraform (módulo github-oidc/); sem chave fixa
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag and push
+        env:
+          REGISTRY: ${{ steps.login-ecr.outputs.registry }} # endereço do ECR — sem isso o push iria pro registro errado
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          docker build -t $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG ${{ env.SERVICE_NAME }}/
+          docker tag $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG $REGISTRY/$ECR_REPOSITORY:latest
+          docker push $REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker push $REGISTRY/$ECR_REPOSITORY:latest
+
+      - name: 'Scan da imagem - relatório completo'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-image.sarif'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Upload container scan SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-image.sarif'
+
+      - name: 'Scan da imagem - bloqueio em CRITICAL'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          severity: 'CRITICAL'
+
+      # ─── 5. Dispara o ArgoCD indiretamente, via Git ──────
+      - name: Update GitOps repo
+        run: |
+          # Clona o repo GitOps separado com um token com permissão
+          # de push nele (Secret GH_PAT) — o GITHUB_TOKEN padrão só
+          # vale para ESTE repositório.
+          git clone https://x-access-token:${{ secrets.GH_PAT }}@github.com/${{ github.repository_owner }}/togglemaster-gitops.git gitops
+          cd gitops
+
+          # Substitui a tag da imagem no manifesto deste serviço —
+          # é a única mudança que essa pipeline faz no repo GitOps.
+          sed -i "s|image: .*|image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}|" ${{ env.SERVICE_NAME }}/deployment.yaml
+
+          git config user.email "ci@github.com"
+          git config user.name "GitHub Actions"
+          git add .
+          # Só commita/pusha se realmente mudou algo (evita erro
+          # "nothing to commit" quando a tag já era igual).
+          git diff --staged --quiet || (git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}" && git push origin main)
+          # Depois deste push, o ArgoCD (rodando dentro do cluster
+          # EKS, monitorando este repositório) detecta a mudança e
+          # atualiza o Deployment automaticamente — nenhum kubectl
+          # manual é necessário a partir daqui.

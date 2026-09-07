@@ -1,0 +1,25 @@
+# ============================================================
+# NAMESPACES — a "gaveta" onde cada grupo de recursos do Kubernetes
+# fica isolado dos demais (nomes de Service/Deployment podem se
+# repetir em namespaces diferentes sem conflito).
+#
+# Este arquivo é aplicado UMA VEZ, manualmente (ou pelo próprio
+# ArgoCD, com "CreateNamespace=true" na Application) ANTES de
+# qualquer outro manifesto deste diretório — os outros arquivos
+# (deployment.yaml, service.yaml, etc.) todos apontam
+# "namespace: togglemaster", então esse namespace precisa existir primeiro.
+# ============================================================
+
+# Namespace onde TODOS os 5 microsserviços do ToggleMaster rodam.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: togglemaster
+---
+# Namespace onde o ArgoCD (a ferramenta de GitOps em si) roda —
+# separado do togglemaster pra não misturar "a ferramenta que
+# gerencia" com "o que ela gerencia".
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd

@@ -1,0 +1,63 @@
+# ============================================================
+# DEPLOYMENT do targeting-service — estrutura idêntica ao
+# flag-service (mesmo padrão de banco próprio + validação via
+# auth-service). Este serviço guarda as regras de segmentação
+# (ex: "50% dos usuários recebem a flag X").
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: targeting-service
+  namespace: togglemaster
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: targeting-service
+  template:
+    metadata:
+      labels:
+        app: targeting-service
+    spec:
+      containers:
+        - name: targeting-service
+          # Atualizado automaticamente pela pipeline (.github/workflows/targeting-service.yml).
+          image: SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/togglemaster/targeting-service:latest
+          ports:
+            - containerPort: 8003
+          env:
+            - name: PORT
+              value: "8003"
+
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: targeting-service-secrets # Secret próprio (banco targeting_db)
+                  key: DATABASE_URL
+
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config
+                  key: AUTH_SERVICE_URL
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

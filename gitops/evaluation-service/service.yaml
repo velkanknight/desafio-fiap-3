@@ -1,0 +1,14 @@
+# Endereço estável do evaluation-service: http://evaluation-service
+# (usado pelo Ingress pra expor a rota pública /evaluate)
+apiVersion: v1
+kind: Service
+metadata:
+  name: evaluation-service
+  namespace: togglemaster
+spec:
+  type: ClusterIP
+  selector:
+    app: evaluation-service
+  ports:
+    - port: 80
+      targetPort: 8004

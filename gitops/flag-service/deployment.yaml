@@ -1,0 +1,66 @@
+# ============================================================
+# DEPLOYMENT do flag-service — mesma estrutura do auth-service (veja
+# os comentários lá para o detalhe de cada campo). A diferença
+# principal aqui: além do banco próprio (flag_db), este serviço
+# também PRECISA CHAMAR o auth-service pra validar a chave de API de
+# quem está fazendo a requisição — por isso o AUTH_SERVICE_URL,
+# vindo do ConfigMap compartilhado (gitops/configmap.yaml), não de
+# um Secret (não é sensível, é só um endereço interno).
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flag-service
+  namespace: togglemaster
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: flag-service
+  template:
+    metadata:
+      labels:
+        app: flag-service
+    spec:
+      containers:
+        - name: flag-service
+          # Atualizado automaticamente pela pipeline (.github/workflows/flag-service.yml) a cada push.
+          image: SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/togglemaster/flag-service:latest
+          ports:
+            - containerPort: 8002 # porta que o gunicorn/Flask escuta (ver flag-service/Dockerfile)
+          env:
+            - name: PORT
+              value: "8002"
+
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: flag-service-secrets # Secret PRÓPRIO deste serviço (não compartilhado com os outros)
+                  key: DATABASE_URL
+
+            - name: AUTH_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config # ConfigMap compartilhado por todos os 5 serviços (gitops/configmap.yaml)
+                  key: AUTH_SERVICE_URL
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

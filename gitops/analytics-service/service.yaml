@@ -1,0 +1,15 @@
+# Endereço estável do analytics-service — na prática só serve pro
+# Kubernetes/Ingress bater no /health; o trabalho real é o worker
+# interno consumindo a fila SQS, não requisições HTTP de fora.
+apiVersion: v1
+kind: Service
+metadata:
+  name: analytics-service
+  namespace: togglemaster
+spec:
+  type: ClusterIP
+  selector:
+    app: analytics-service
+  ports:
+    - port: 80
+      targetPort: 8005

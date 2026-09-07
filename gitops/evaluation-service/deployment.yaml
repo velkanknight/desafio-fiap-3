@@ -1,0 +1,111 @@
+# ============================================================
+# DEPLOYMENT do evaluation-service — o "hot path" do sistema. Duas
+# coisas diferenciam este Deployment dos anteriores:
+#
+#   1. serviceAccountName: em vez de usar a ServiceAccount "default"
+#      do namespace, ele usa uma ServiceAccount PRÓPRIA
+#      ("evaluation-service", definida em gitops/service-accounts.yaml)
+#      que tem uma annotation apontando pra uma IAM Role da AWS
+#      (criada pelo módulo irsa_evaluation no Terraform). Isso é o
+#      que permite este Pod enviar mensagem pro SQS SEM ter
+#      access key nenhuma dentro dele — a AWS confia no token que o
+#      próprio EKS injeta no Pod (ver terraform/modules/irsa/main.tf).
+#
+#   2. Não tem DATABASE_URL nenhum — este serviço não conversa direto
+#      com nenhum banco Postgres, só com Redis (cache) e HTTP interno
+#      com flag-service/targeting-service.
+# ============================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evaluation-service
+  namespace: togglemaster
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: evaluation-service
+  template:
+    metadata:
+      labels:
+        app: evaluation-service
+    spec:
+      # Sem isso, o Pod usaria a ServiceAccount "default" (sem
+      # nenhuma permissão AWS) e as chamadas ao SQS falhariam com
+      # erro de permissão (AccessDenied).
+      serviceAccountName: evaluation-service # IRSA: só permissão de sqs:SendMessage (ver terraform/main.tf, módulo irsa_evaluation)
+
+      containers:
+        - name: evaluation-service
+          # Atualizado automaticamente pela pipeline (.github/workflows/evaluation-service.yml).
+          image: SEU_ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/togglemaster/evaluation-service:latest
+          ports:
+            - containerPort: 8004
+          env:
+            - name: PORT
+              value: "8004"
+
+            # Sensível (é uma connection string com host/porta do
+            # ElastiCache) -> vem de Secret, não de ConfigMap.
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: evaluation-service-secrets
+                  key: REDIS_URL
+
+            # Chave usada nas chamadas HTTP internas pro
+            # flag-service/targeting-service (eles validam essa
+            # chave contra o auth-service) — também sensível.
+            - name: SERVICE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: evaluation-service-secrets
+                  key: SERVICE_API_KEY
+
+            # As 4 abaixo NÃO são sensíveis (URLs internas, região,
+            # URL da fila) -> vêm do ConfigMap compartilhado.
+            - name: FLAG_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config
+                  key: FLAG_SERVICE_URL
+            - name: TARGETING_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config
+                  key: TARGETING_SERVICE_URL
+            - name: AWS_SQS_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config
+                  key: AWS_SQS_URL
+            - name: AWS_REGION
+              valueFrom:
+                configMapKeyRef:
+                  name: services-config
+                  key: AWS_REGION
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8004
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          # CPU um pouco maior que os outros serviços (200m de
+          # request) porque este é o "hot path" — recebe mais
+          # tráfego e faz chamadas concorrentes (goroutines) pro
+          # flag-service e targeting-service.
+          resources:
+            requests:
+              cpu: 200m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi

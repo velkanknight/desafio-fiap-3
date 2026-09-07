@@ -1,0 +1,25 @@
+# ============================================================
+# Copie este arquivo para "terraform.tfvars" (mesma pasta) e
+# preencha com valores reais. O terraform.tfvars de verdade fica
+# de fora do Git (veja o .gitignore) porque tem a senha do banco.
+#
+#   cp terraform.tfvars.example terraform.tfvars
+# ============================================================
+
+aws_region             = "us-east-1"
+db_username            = "admin"
+db_password            = "DEFINA-UMA-SENHA-FORTE-AQUI" # nunca deixe esse valor de exemplo!
+eks_node_instance_type = "t3.medium"
+eks_desired_size       = 2
+
+# false = conta AWS pessoal (padrão deste projeto).
+# Só mude para true se estiver numa conta AWS Academy (LabRole).
+use_academy_lab_role = false
+
+# Usados pelo módulo github-oidc para montar a trust policy do OIDC
+# (quem pode se autenticar como essa IAM Role). AJUSTE para o seu
+# usuário/organização e o nome real do repositório no GitHub —
+# se estiver errado, o GitHub Actions recebe "AccessDenied" ao tentar
+# assumir a role, mesmo com o Secret AWS_ROLE_ARN certo.
+github_org  = "velkanknight"
+github_repo = "desafio-fiap-3"
