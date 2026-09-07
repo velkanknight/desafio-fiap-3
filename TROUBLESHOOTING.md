@@ -188,32 +188,102 @@ node group, 3× RDS PostgreSQL 15, ElastiCache Redis, DynamoDB
 provider do cluster, roles IRSA `togglemaster-evaluation-role` /
 `togglemaster-analytics-role`, role `togglemaster-github-actions` (ECR push).
 
-Próximos passos: 5 a 8 do `README.md` (secret `AWS_ROLE_ARN`, secrets no
-cluster, ArgoCD — agora via workflow `argocd.yml` — e pipelines de app).
+---
+
+# PARTE 2 — Passos 5 a 8 (secrets, ArgoCD, pipelines de aplicação)
+
+Workflows manuais criados nesta fase (aba Actions → Run workflow):
+
+| Workflow | Para quê |
+|---|---|
+| `terraform.yml` (input `action`) | `apply` cria/atualiza a infra; `destroy` derruba tudo |
+| `argocd.yml` | instala o ArgoCD no EKS + registra a Application (Passo 7) |
+| `cluster-secrets.yml` | cria os Secrets dos serviços no namespace `togglemaster` (Passo 6) |
+
+## 8. ArgoCD Application não sincronizava os 5 serviços
+
+**Sintoma:** ao registrar a Application, o ArgoCD só aplicava os YAML da raiz
+do repo GitOps (`namespaces`, `service-accounts`, `configmap`, `ingress`) e
+ignorava `gitops/<serviço>/deployment.yaml` etc.
+
+**Causa:** `spec.source.path: .` **sem `directory.recurse`** — o ArgoCD não
+entra em subpastas por padrão.
+
+**Correção (commit `b3ba1f3`):** `gitops/argocd-application.yaml` ganhou
+`directory: { recurse: true, exclude: "argocd-application.yaml" }`.
+
+**Status:** ✅ corrigido (re-rodar "Instala ArgoCD" pra Application pegar).
 
 ---
 
-## Pendências / pontos de atenção ainda não atingidos
+## 9. auth-service — `missing go.sum entry`
 
-Não bloqueiam a pipeline de Terraform, mas provavelmente aparecem nos passos
-seguintes do README:
+**Sintoma:** job `build` do `auth-service.yml`:
+```
+main.go:9:2: missing go.sum entry for module providing package
+github.com/jackc/pgx/v4/stdlib
+```
 
-- **`scripts/bootstrap.sh`** ainda monta o `sub` no formato antigo (ver item 1) —
-  ajustar se for reexecutar o bootstrap.
-- **Pipelines de aplicação (Passo 8)** — `go-version: '1.22'` nos workflows pode
-  não bater com o `go.mod` de cada serviço; `golangci-lint-action@v4` + `version: latest`
-  pode quebrar por mudança de config do golangci-lint v2; `aquasecurity/trivy-action@master`
-  está sem pin de versão.
-- **Custo/tempo do `apply`:** cria NAT Gateway, 3× RDS, EKS + node group e
-  ElastiCache — ~15–20 min e recursos cobrados na conta pessoal. Lembrar de
-  `terraform destroy` ao final da entrega.
-- **Aprovação manual:** se `Settings → Environments → production` tiver
-  *required reviewers*, o job `apply` fica pausado esperando aprovação.
+**Causa:** o `auth-service` não tinha `go.sum` commitado (o Dockerfile fazia
+`go mod tidy` em build-time). O CI roda `go mod download` + `go test`, que
+exigem `go.sum`.
+
+**Correção:** `go mod tidy` gerado e `go.sum` commitado. Dockerfile passou a
+`COPY go.mod go.sum` + `go mod download` (sem `tidy`, build reproduzível).
+
+**Status:** ✅ resolvido.
+
+---
+
+## 10. auth-service — dependências e imagens base desatualizadas (gate de segurança)
+
+**Causa:** para o baseline verde, o job `security` (Trivy, bloqueia em
+CRITICAL) travaria em:
+- `golang.org/x/crypto v0.20.0` → **CVE-2024-45337 (CRITICAL)**
+- imagem runtime `alpine:3.19` (EOL nov/2025, sem patches)
+- imagem build `golang:1.21-alpine`
+
+**Correção:**
+- `golang.org/x/crypto` → `v0.31.0`, `golang.org/x/text` → `v0.21.0`,
+  `go.mod` → `go 1.23`
+- Dockerfile: `golang:1.23-alpine` + `alpine:3.21`
+- `auth-service.yml`: `go-version` `1.22` → `1.23`;
+  `golangci-lint-action@v4` + `version: latest` → `@v6` + `version: v1.62.2`
+  (o golangci-lint v2 mudou o formato de config)
+
+**Status:** ⏳ aplicado no código, aguardando a run.
+
+---
+
+## Pendências / pontos de atenção
+
+- **`scripts/bootstrap.sh`** ainda monta o `sub` do OIDC no formato antigo
+  (ver item 1) — ajustar se for reexecutar o bootstrap numa conta limpa.
+- **Demais serviços (flag, targeting, evaluation, analytics):** aplicar o mesmo
+  tratamento do item 10 conforme cada pipeline for rodada
+  (Python: `Flask 2.2.2` / `Werkzeug 2.2.3` / `gunicorn 20.1.0` / `requests 2.28.1`
+  têm CVEs HIGH; base `python:3.11-slim` a checar; `evaluation-service` tem
+  `alpine:3.19` e `golang.org/x/net v0.21.0`).
+- **`SERVICE_API_KEY`:** o valor no secret é placeholder — a chave real precisa
+  ser gerada via `POST /admin/keys` do auth-service (com a `MASTER_KEY`) depois
+  que ele estiver no ar, e o secret atualizado + workflow `cluster-secrets`
+  re-rodado.
+- **Custo:** NAT Gateway + 3× RDS + EKS + ElastiCache + LoadBalancers rodam
+  24/7 e são cobrados. Ao fim da entrega: apagar os LBs do k8s
+  (`kubectl delete svc ...`) e rodar `terraform.yml` com `action=destroy`.
+- **Demonstração do bloqueio (entregável):** com o baseline verde, abrir um PR
+  adicionando uma dependência com CVE CRITICAL conhecida, mostrar o job
+  `security` falhando, depois reverter e mostrar passando.
 
 ---
 
 ## Ordem para retomar
 
-1. `git add -A && git commit && git push` na `main` (dispara a pipeline).
-2. Acompanhar job `plan` → `apply` na aba Actions.
-3. Seguir Passo 5 em diante do `README.md`.
+1. Infra: `terraform.yml` já aplicada (Parte 1). Para mudanças, push em
+   `terraform/**` ou Run workflow.
+2. Passo 5: secret `AWS_ROLE_ARN` = output `github_actions_role_arn`. ✅
+3. Passo 6: Run workflow "Aplica Secrets no cluster" (criar antes os secrets
+   `MASTER_KEY` e `SERVICE_API_KEY`). ✅
+4. Passo 7: Run workflow "Instala ArgoCD". ✅ (re-rodar após o item 8)
+5. Passo 8: rodar as 5 pipelines de serviço, uma a uma, corrigindo cada
+   achado (itens 9+).

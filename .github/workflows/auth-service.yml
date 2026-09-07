@@ -58,7 +58,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22' # instala o Go 1.22 na máquina virtual (o go.mod pede 1.21+)
+          go-version: '1.23' # bate com o "go 1.23" do go.mod
 
       - name: Download deps
         run: |
@@ -85,12 +85,12 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.23'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v4 # action pronta que já sabe instalar e rodar o golangci-lint
+        uses: golangci/golangci-lint-action@v6 # action pronta que já sabe instalar e rodar o golangci-lint
         with:
-          version: latest
+          version: v1.62.2 # pinado na última série v1 — o golangci-lint v2 mudou o formato de config e quebra sem migração
           working-directory: ${{ env.SERVICE_NAME }} # roda só dentro da pasta do serviço
 
   # ─── 3. Security Scan (SAST + SCA) ────────────────────────────
@@ -138,7 +138,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: '1.23'
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest # instala a ferramenta de SAST pra Go

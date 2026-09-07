@@ -13,3 +13,4 @@ secrets-reais.yaml
 
 # SO / editor
 .DS_Store
+*.exe
