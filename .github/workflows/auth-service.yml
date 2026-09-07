@@ -59,7 +59,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23' # bate com o "go 1.23" do go.mod
+          go-version: '1.25' # bate com o "go 1.25" do go.mod (exigido por x/crypto v0.55)
 
       - name: Download deps
         run: |
@@ -86,7 +86,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v6 # action pronta que já sabe instalar e rodar o golangci-lint
@@ -139,7 +139,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.25'
 
       - name: Install gosec
         run: go install github.com/securego/gosec/v2/cmd/gosec@latest # instala a ferramenta de SAST pra Go
