@@ -148,9 +148,18 @@ Esse é o Secret que as 5 pipelines de aplicação (`auth-service.yml`,
 
 ## Passo 6 — Criar os Secrets sensíveis direto no cluster (NUNCA no Git)
 
-Preencha os placeholders de `secrets.example.yaml` com os endpoints reais
-(outputs `rds_*_endpoint`, `elasticache_redis_url` — veja no log do job
-`apply` ou rode `terraform output`) e aplique diretamente, sem commitar:
+**Forma recomendada (workflow):** o cluster fica em modo `CONFIG_MAP`, então
+`kubectl` local só funciona pra quem tem acesso RBAC nele. Para não depender
+disso, use o workflow **Actions → "Aplica Secrets no cluster" → Run workflow**
+(`.github/workflows/cluster-secrets.yml`): ele lê os endpoints do
+`terraform output`, monta os Secrets a partir dos GitHub Secrets `DB_PASSWORD`,
+`MASTER_KEY` e `SERVICE_API_KEY` (crie os dois últimos antes) e aplica no
+namespace `togglemaster` — sem ecoar nenhum valor. O ArgoCD continua não
+gerenciando Secret nenhum.
+
+**Forma manual (se tiver acesso kubectl):** preencha os placeholders de
+`secrets.example.yaml` com os endpoints reais (outputs `rds_*_endpoint`,
+`elasticache_redis_url`) e aplique sem commitar:
 
 ```bash
 cp secrets.example.yaml secrets-reais.yaml
@@ -161,6 +170,14 @@ rm secrets-reais.yaml
 ```
 
 ## Passo 7 — Instalar o ArgoCD
+
+**Forma recomendada (workflow):** **Actions → "Instala ArgoCD" → Run workflow**
+(`.github/workflows/argocd.yml`). Ele autentica com a role do Terraform (que
+criou o cluster, logo tem acesso admin), instala o ArgoCD, opcionalmente expõe
+a UI via LoadBalancer e registra a Application do repo GitOps. A URL, o usuário
+`admin` e a senha inicial saem no *Summary* do run.
+
+**Forma manual:**
 
 ```bash
 kubectl create namespace argocd
