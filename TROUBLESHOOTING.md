@@ -165,14 +165,31 @@ fatal: ... The requested URL returned error: 403
 `togglemaster-gitops`. O clone/commit funcionam, só o `git push` é negado.
 **Não afeta a infra** — ela já está criada e no state.
 
-**Correção:** gerar um PAT **classic** com escopo `repo` (ou fine-grained com
-*Contents: Read and write* em `togglemaster-gitops`) e atualizar o secret
-`GH_PAT`. As 5 pipelines de aplicação também dependem desse secret pra
-escrever a tag da imagem no repo GitOps, então precisa funcionar de qualquer
-forma. Depois, re-rodar a pipeline (o apply fica no-op, só o passo do GitOps
-roda de novo).
+**Causa detalhada:** os tokens tentados eram **fine-grained** (`github_pat_...`),
+que nascem sem repositório e sem permissão selecionados — não escrevem em nada.
 
-**Status:** ⏳ aguardando novo `GH_PAT`.
+**Correção:** gerado um PAT **classic** (`ghp_...`) com escopo `repo` + `workflow`
+e colado no secret `GH_PAT` (`desafio-fiap-3` → Settings → Secrets and variables
+→ Actions). As 5 pipelines de aplicação também usam esse secret.
+
+**Status:** ✅ resolvido — run `34165598074` verde de ponta a ponta
+(`Apply complete! 0 added` + push no `togglemaster-gitops` OK).
+
+---
+
+## Resultado final
+
+Run `34165598074` (2026-09-07 ~22:08): **Plan ✅ + Apply ✅**. Infraestrutura
+completa no ar e o repo `togglemaster-gitops` com os ARNs/SQS URL preenchidos.
+
+Recursos criados: VPC `vpc-0aa01033dfa495e1c`, EKS `togglemaster` (1.33) +
+node group, 3× RDS PostgreSQL 15, ElastiCache Redis, DynamoDB
+`ToggleMasterAnalytics`, SQS `togglemaster-events` (+ DLQ), 5× ECR, OIDC
+provider do cluster, roles IRSA `togglemaster-evaluation-role` /
+`togglemaster-analytics-role`, role `togglemaster-github-actions` (ECR push).
+
+Próximos passos: 5 a 8 do `README.md` (secret `AWS_ROLE_ARN`, secrets no
+cluster, ArgoCD — agora via workflow `argocd.yml` — e pipelines de app).
 
 ---
 
