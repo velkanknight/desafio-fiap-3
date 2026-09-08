@@ -256,7 +256,17 @@ jobs:
           # Com "||", só faz o commit/push SE realmente mudou algo
           # (evita erro de "nothing to commit" quando por acaso a tag
           # já era a mesma).
-          git diff --staged --quiet || (git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}" && git push origin main)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}"
+            # push com retry: as 5 pipelines podem escrever no mesmo repo
+            # ao mesmo tempo -> rebase + retenta em vez de falhar por "fetch first".
+            for i in 1 2 3 4 5; do
+              git push origin main && break
+              echo "push rejeitado (tentativa $i), rebase e retenta..."
+              git fetch origin main && git rebase origin/main
+              sleep $((RANDOM % 4 + 2))
+            done
+          fi
 
           # A PARTIR DAQUI, quem assume é o ArgoCD: ele fica
           # observando este repositório GitOps e, ao detectar este

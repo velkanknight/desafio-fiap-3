@@ -205,7 +205,17 @@ jobs:
           git add .
           # Só commita/pusha se realmente mudou algo (evita erro
           # "nothing to commit" quando a tag já era igual).
-          git diff --staged --quiet || (git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}" && git push origin main)
+          if ! git diff --staged --quiet; then
+            git commit -m "chore: update ${{ env.SERVICE_NAME }} to ${{ github.sha }}"
+            # push com retry: as 5 pipelines podem escrever no mesmo repo
+            # ao mesmo tempo -> rebase + retenta em vez de falhar por "fetch first".
+            for i in 1 2 3 4 5; do
+              git push origin main && break
+              echo "push rejeitado (tentativa $i), rebase e retenta..."
+              git fetch origin main && git rebase origin/main
+              sleep $((RANDOM % 4 + 2))
+            done
+          fi
           # Depois deste push, o ArgoCD (rodando dentro do cluster
           # EKS, monitorando este repositório) detecta a mudança e
           # atualiza o Deployment automaticamente — nenhum kubectl
