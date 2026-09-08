@@ -1,0 +1,80 @@
+# ============================================================
+# PIPELINE: STATUS DO CLUSTER (read-only)
+#
+# workflow_dispatch — dá um retrato do que está rodando no EKS sem
+# precisar de kubectl local. Usa a role do Terraform (cluster creator,
+# tem acesso admin). Não altera nada.
+# ============================================================
+name: Status do cluster
+
+on:
+  workflow_dispatch:
+    inputs:
+      namespace:
+        description: "Namespace pra inspecionar (vazio = todos)"
+        type: string
+        default: "togglemaster"
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: togglemaster
+
+jobs:
+  status:
+    name: Status
+    runs-on: ubuntu-latest
+    steps:
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_TERRAFORM }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configura o kubectl
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Nodes
+        run: kubectl get nodes -o wide
+
+      - name: Pods
+        run: |
+          NS='${{ inputs.namespace }}'
+          if [ -n "$NS" ]; then
+            kubectl get pods -n "$NS" -o wide
+          else
+            kubectl get pods -A -o wide
+          fi
+
+      - name: Deployments / Services
+        run: |
+          NS='${{ inputs.namespace }}'
+          NS_FLAG=$([ -n "$NS" ] && echo "-n $NS" || echo "-A")
+          kubectl get deploy,svc,ingress $NS_FLAG
+
+      - name: Pods com problema (describe + últimos logs)
+        run: |
+          NS='${{ inputs.namespace }}'
+          [ -z "$NS" ] && NS=togglemaster
+          bad=$(kubectl get pods -n "$NS" --no-headers 2>/dev/null \
+            | awk '$3!="Running" && $3!="Completed" {print $1}')
+          if [ -z "$bad" ]; then echo "Nenhum pod com problema em $NS."; exit 0; fi
+          for p in $bad; do
+            echo "=================== $p ==================="
+            kubectl describe pod -n "$NS" "$p" | tail -30
+            echo "----- logs (--previous, se houver) -----"
+            kubectl logs -n "$NS" "$p" --previous --tail=40 2>/dev/null || \
+              kubectl logs -n "$NS" "$p" --tail=40 2>/dev/null || echo "(sem logs)"
+          done
+
+      - name: Eventos recentes
+        run: |
+          NS='${{ inputs.namespace }}'
+          [ -z "$NS" ] && NS=togglemaster
+          kubectl get events -n "$NS" --sort-by=.lastTimestamp | tail -30
+
+      - name: ArgoCD Application
+        run: kubectl get applications -n argocd -o wide 2>/dev/null || echo "(ArgoCD não instalado / sem Application)"
