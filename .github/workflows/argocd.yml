@@ -29,6 +29,10 @@ on:
         description: "Aplicar gitops/argocd-application.yaml (liga o ArgoCD ao repo togglemaster-gitops)"
         type: boolean
         default: true
+      admin_password:
+        description: "Senha do usuário admin do ArgoCD (deixe em branco pra usar a senha inicial gerada)"
+        type: string
+        default: "admin123"
 
 permissions:
   id-token: write # OIDC pra assumir a role AWS
@@ -114,13 +118,31 @@ jobs:
       # A senha é marcada como secret no log (::add-mask::) pra não
       # vazar nos logs, mas aparece no Summary (que é privado do repo).
       # --------------------------------------------------------
+      # Se admin_password foi informado, define ele como a senha do admin
+      # (grava o hash bcrypt no argocd-secret e reinicia o argocd-server).
+      # Assim não depende do secret argocd-initial-admin-secret (que some
+      # depois do primeiro login).
+      - name: Define a senha do admin
+        if: ${{ inputs.admin_password != '' }}
+        env:
+          ADMIN_PW: ${{ inputs.admin_password }}
+        run: |
+          hash=$(htpasswd -nbBC 10 "" "$ADMIN_PW" | cut -d: -f2 | sed 's/^\$2y/\$2a/')
+          kubectl -n argocd patch secret argocd-secret \
+            -p "{\"stringData\": {\"admin.password\": \"${hash}\", \"admin.passwordMtime\": \"$(date +%FT%T%Z)\"}}"
+          kubectl -n argocd rollout restart deploy/argocd-server
+          kubectl -n argocd rollout status deploy/argocd-server --timeout=180s
+
       - name: Mostra como acessar
         run: |
           # Repo privado + Actions só visível a colaboradores -> imprimir a
-          # senha inicial aqui é aceitável pra um projeto de estudo. Troque
-          # no primeiro login mesmo assim.
-          pass=$(kubectl -n argocd get secret argocd-initial-admin-secret \
-            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)
+          # senha aqui é aceitável pra um projeto de estudo. Troque no
+          # primeiro login mesmo assim.
+          pass="${{ inputs.admin_password }}"
+          if [ -z "$pass" ]; then
+            pass=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+              -o jsonpath='{.data.password}' 2>/dev/null | base64 -d || true)
+          fi
           {
             echo "## ArgoCD instalado"
             echo ""
@@ -131,13 +153,9 @@ jobs:
             fi
             echo "- **Usuário:** admin"
             if [ -n "$pass" ]; then
-              echo "- **Senha inicial:** \`$pass\`"
+              echo "- **Senha:** \`$pass\`"
             else
-              echo "- **Senha inicial:** secret \`argocd-initial-admin-secret\` não existe mais"
-              echo "  (foi apagado, ou você já trocou a senha). Pra resetar:"
-              echo '  ```'
-              echo '  kubectl -n argocd patch secret argocd-secret -p "{\"stringData\":{\"admin.password\":\"$(htpasswd -bnBC 10 \"\" NOVASENHA | tr -d \":\\n\" | sed \"s/^[^$]*//\")\",\"admin.passwordMtime\":\"$(date +%FT%T%Z)\"}}"'
-              echo '  ```'
+              echo "- **Senha:** não disponível (rode de novo informando \`admin_password\`)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           echo "----- também no log -----"
