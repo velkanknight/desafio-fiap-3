@@ -409,6 +409,52 @@ Além disso:
 
 ---
 
+## 19. Scan da imagem bloqueia em CVE de SO sem correção
+
+**Sintoma:** os 3 serviços Python passavam build/lint/security, buildavam e
+davam push da imagem, e falhavam no `Scan da imagem - bloqueio em CRITICAL`:
+```
+perl  CVE-2026-42496  CRITICAL  fix_deferred   perl-archive-tar: path traversal
+perl  CVE-2026-8376   CRITICAL  affected       perl: heap buffer overflow
+```
+
+**Causa:** CVEs no pacote `perl` que vem na base `python:3.11-slim` (Debian),
+com status `fix_deferred`/`affected` — **sem patch upstream disponível**. Não é
+possível "corrigir" trocando versão.
+
+**Correção:** `ignore-unfixed: true` no step de **bloqueio** do scan da imagem
+(nos 5 workflows). O gate passa a travar só em CRITICAL **com fix disponível**
+— exatamente o caso de um PR que introduz uma dependência vulnerável (a
+demonstração pedida na Fase 3). Os achados sem fix continuam no relatório
+completo / SARIF / aba Security. Commit `4e06acc`.
+
+**Status:** ✅ 4/5 verdes na primeira rodada (auth, evaluation, targeting,
+analytics). flag-service caiu no item 20.
+
+---
+
+## 20. Push no repo GitOps rejeitado — `! [rejected] (fetch first)`
+
+**Sintoma:** com as 5 pipelines rodando em paralelo (um push que mexeu nos 5
+workflows), o `flag-service` passou tudo e falhou no "Update GitOps repo":
+```
+! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'togglemaster-gitops'
+```
+
+**Causa:** race condition — as 5 pipelines clonam o `togglemaster-gitops`,
+commitam a nova tag de imagem no seu próprio `deployment.yaml` e dão `git push`
+quase ao mesmo tempo. Quem chega depois do primeiro push é rejeitado.
+
+**Correção:** o passo de push passou a fazer `git fetch origin main && git
+rebase origin/main` e retentar (até 5×, com jitter) em vez de falhar. Cada
+pipeline edita um arquivo diferente, então o rebase nunca conflita. Commit
+`161ef65`.
+
+**Status:** ⏳ aguardando run.
+
+---
+
 ## Pendências / pontos de atenção
 
 - **`scripts/bootstrap.sh`** ainda monta o `sub` do OIDC no formato antigo
