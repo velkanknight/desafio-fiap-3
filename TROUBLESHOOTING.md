@@ -451,7 +451,9 @@ rebase origin/main` e retentar (até 5×, com jitter) em vez de falhar. Cada
 pipeline edita um arquivo diferente, então o rebase nunca conflita. Commit
 `161ef65`.
 
-**Status:** ⏳ aguardando run.
+**Status:** ✅ resolvido — as **5 pipelines fecharam verdes** e os 5
+`deployment.yaml` do `togglemaster-gitops` apontam pra imagem real do ECR
+(tag `161ef65...`).
 
 ---
 
@@ -477,13 +479,23 @@ pipeline edita um arquivo diferente, então o rebase nunca conflita. Commit
 
 ---
 
-## Ordem para retomar
+## Estado / próximos passos
 
-1. Infra: `terraform.yml` já aplicada (Parte 1). Para mudanças, push em
-   `terraform/**` ou Run workflow.
-2. Passo 5: secret `AWS_ROLE_ARN` = output `github_actions_role_arn`. ✅
-3. Passo 6: Run workflow "Aplica Secrets no cluster" (criar antes os secrets
-   `MASTER_KEY` e `SERVICE_API_KEY`). ✅
-4. Passo 7: Run workflow "Instala ArgoCD". ✅ (re-rodar após o item 8)
-5. Passo 8: rodar as 5 pipelines de serviço, uma a uma, corrigindo cada
-   achado (itens 9+).
+1. Infra (`terraform.yml`) ✅ aplicada.
+2. Passo 5 — secret `AWS_ROLE_ARN` ✅.
+3. Passo 6 — Secrets no cluster ✅ (workflow "Aplica Secrets no cluster").
+4. Passo 7 — ArgoCD instalado ✅. **Re-rodar "Instala ArgoCD"** depois do
+   item 8 (fix do `recurse`) se ainda não foi.
+5. Passo 8 — as **5 pipelines de serviço estão verdes** (itens 9–20). Imagens
+   no ECR, `togglemaster-gitops` atualizado.
+
+Falta:
+- Confirmar no ArgoCD / `kubectl -n togglemaster get pods` que os 5 serviços
+  subiram (podem ficar em `CrashLoopBackOff` até o item abaixo).
+- **`SERVICE_API_KEY` real:** gerar via `POST /admin/keys` do auth-service (com
+  a `MASTER_KEY`), atualizar o secret e re-rodar "Aplica Secrets no cluster".
+- **Demonstração do gate:** PR que adiciona uma dependência com CVE CRITICAL
+  conhecida → mostrar `security` falhando → reverter → verde.
+- **Ao fim da entrega:** apagar os LoadBalancers (`kubectl delete svc` nos
+  namespaces `togglemaster` e `argocd`) e rodar `terraform.yml` com
+  `action=destroy`.
