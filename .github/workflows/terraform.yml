@@ -209,6 +209,29 @@ jobs:
           name: tfplan
           path: terraform
 
+      # ----------------------------------------------------------
+      # PRÉ-DESTROY: apaga os LoadBalancers criados pelo Kubernetes
+      # (ELB do argocd-server, e qualquer Service type=LoadBalancer no
+      # cluster). Eles NÃO estão no state do Terraform, então se
+      # ficarem de pé o `terraform destroy` falha ao deletar a VPC
+      # (ENIs/SGs presos). Só roda no fluxo de destroy.
+      # ----------------------------------------------------------
+      - name: Pré-destroy — remove LoadBalancers do cluster
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.action == 'destroy' }}
+        continue-on-error: true # se o cluster já não existir, segue o destroy
+        run: |
+          aws eks update-kubeconfig --name togglemaster --region "$AWS_REGION" || exit 0
+          # remove a Application do ArgoCD (pra o controller não recriar nada)
+          kubectl delete application togglemaster -n argocd --ignore-not-found --timeout=60s || true
+          # apaga todo Service type=LoadBalancer de todos os namespaces
+          kubectl get svc -A -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
+            | while read ns name; do
+                [ -n "$name" ] && kubectl delete svc "$name" -n "$ns" --ignore-not-found --timeout=60s || true
+              done
+          # dá tempo do cloud-controller-manager remover os ELBs na AWS
+          echo "Aguardando 120s a AWS remover os ELBs..."
+          sleep 120
+
       # Aplica o MESMO plano que foi revisado/aprovado acima, em vez
       # de recalcular um novo — evita "TOCTOU" (a infra real mudar
       # entre o plan e o apply sem ninguém perceber). Se o plano for
