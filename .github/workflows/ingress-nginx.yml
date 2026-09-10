@@ -1,0 +1,141 @@
+# ============================================================
+# PIPELINE: INSTALA O INGRESS-NGINX CONTROLLER NO CLUSTER EKS
+#
+# Roda SÓ manualmente (workflow_dispatch), DEPOIS que a terraform.yml
+# criou o cluster. O repo GitOps já tem o objeto Ingress
+# (gitops/ingress.yaml, ingressClassName: nginx) — mas sem um
+# controller que o atenda ele fica órfão (sem ADDRESS). Este workflow
+# instala esse controller via Helm; ele sobe um Service
+# type=LoadBalancer -> 1 ELB público na AWS. Aí o Ingress existente
+# pega o endereço do ELB e as rotas /auth, /flags, /rules, /evaluate,
+# /analytics passam a responder de fora do cluster.
+#
+# AUTENTICAÇÃO: mesma role da pipeline de Terraform
+# (AWS_ROLE_ARN_TERRAFORM) — cluster creator, kubectl admin implícito.
+#
+# PRÉ-REQUISITOS:
+#   - terraform.yml concluído (cluster no ar)
+#   - Secret AWS_ROLE_ARN_TERRAFORM configurado
+#
+# CUSTO: +1 ELB (~US$16/mês pro-rata) enquanto rodar. A pré-limpeza
+# do destroy (terraform.yml) já remove todo Service type=LoadBalancer,
+# então isto não trava o teardown.
+# ============================================================
+name: Instala ingress-nginx
+
+on:
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: "Versão do chart ingress-nginx (Helm)"
+        type: string
+        default: "4.11.3"
+      uninstall:
+        description: "Em vez de instalar, REMOVE o ingress-nginx (helm uninstall) — apaga o ELB"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # OIDC pra assumir a role AWS
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  CLUSTER_NAME: togglemaster
+  NAMESPACE: ingress-nginx
+  RELEASE: ingress-nginx
+
+jobs:
+  install:
+    name: Instala ingress-nginx
+    runs-on: ubuntu-latest
+    # Mesmo gate de aprovação manual do Terraform: cria um LoadBalancer cobrado.
+    environment: production
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Autentica na AWS via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_TERRAFORM }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configura o kubectl pro cluster EKS
+        run: aws eks update-kubeconfig --name "$CLUSTER_NAME" --region "$AWS_REGION"
+
+      - name: Confere acesso ao cluster
+        run: kubectl get nodes
+
+      # --------------------------------------------------------
+      # Remoção opcional: helm uninstall -> o Service LoadBalancer
+      # some -> a AWS destrói o ELB.
+      # --------------------------------------------------------
+      - name: Remove o ingress-nginx
+        if: ${{ inputs.uninstall }}
+        run: |
+          helm uninstall "$RELEASE" -n "$NAMESPACE" || echo "release não encontrado, nada a fazer"
+          echo "## ingress-nginx removido" >> "$GITHUB_STEP_SUMMARY"
+
+      # --------------------------------------------------------
+      # Instala/atualiza via Helm. Idempotente (upgrade --install).
+      # É o mesmo chart oficial do projeto kubernetes/ingress-nginx.
+      # --------------------------------------------------------
+      - name: Adiciona o repo Helm do ingress-nginx
+        if: ${{ !inputs.uninstall }}
+        run: |
+          helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+          helm repo update
+
+      - name: Instala/atualiza o ingress-nginx
+        if: ${{ !inputs.uninstall }}
+        run: |
+          helm upgrade --install "$RELEASE" ingress-nginx/ingress-nginx \
+            --namespace "$NAMESPACE" --create-namespace \
+            --version "${{ inputs.chart_version }}" \
+            --set controller.service.type=LoadBalancer \
+            --set controller.service.externalTrafficPolicy=Local \
+            --set-string controller.service.annotations."service\.beta\.kubernetes\.io/aws-load-balancer-type"=nlb \
+            --set controller.ingressClassResource.name=nginx \
+            --set controller.ingressClassResource.default=false \
+            --wait --timeout 5m
+
+      - name: Espera o LoadBalancer receber um endereço
+        if: ${{ !inputs.uninstall }}
+        run: |
+          echo "Aguardando o ELB do ingress-nginx..."
+          host=""
+          for i in $(seq 1 30); do
+            host=$(kubectl -n "$NAMESPACE" get svc "${RELEASE}-controller" \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || true)
+            [ -n "$host" ] && break
+            sleep 10
+          done
+          echo "INGRESS_HOST=$host" >> "$GITHUB_ENV"
+
+      - name: Mostra o estado do Ingress da aplicação
+        if: ${{ !inputs.uninstall }}
+        run: |
+          kubectl -n togglemaster get ingress togglemaster-ingress -o wide || true
+
+      - name: Resumo
+        if: ${{ !inputs.uninstall }}
+        run: |
+          {
+            echo "## ingress-nginx instalado"
+            echo ""
+            if [ -n "${INGRESS_HOST:-}" ]; then
+              echo "- **Host do ELB:** \`${INGRESS_HOST}\`"
+              echo ""
+              echo "O objeto Ingress \`togglemaster-ingress\` deve pegar esse endereço em"
+              echo "1-2 min. Rotas públicas da API:"
+              echo ""
+              echo '```'
+              echo "curl http://${INGRESS_HOST}/flags/health"
+              echo "curl http://${INGRESS_HOST}/auth/health"
+              echo "curl http://${INGRESS_HOST}/evaluate/health"
+              echo '```'
+            else
+              echo "- ELB ainda sem hostname — rode \"Status do cluster\" daqui a pouco pra ver."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
