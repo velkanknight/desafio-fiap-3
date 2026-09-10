@@ -21,6 +21,11 @@ resource "aws_ecr_repository" "services" {
 
   name = "${var.prefix}/${each.value}" # ex: "togglemaster/auth-service"
 
+  # Permite o "terraform destroy" apagar o repositório mesmo que ele
+  # ainda contenha imagens (a CI enche isso de tags). Sem isto, o
+  # destroy falha com RepositoryNotEmptyException.
+  force_delete = true
+
   # Faz a AWS escanear a imagem automaticamente por vulnerabilidades
   # conhecidas toda vez que uma nova versão é enviada (push).
   image_scanning_configuration {
